@@ -8,9 +8,8 @@ use std::{
     sync::Arc,
 };
 use tokio::net::TcpStream;
-use tokio_rustls::{client::TlsStream, rustls::ClientConfig, TlsConnector};
-use webpki::DNSNameRef;
-
+use tokio_rustls::{client::TlsStream, rustls::ClientConfig, TlsConnector, rustls::{RootCertStore, OwnedTrustAnchor, ServerName}};
+use webpki::TrustAnchor;
 use super::get_cipher_suite;
 
 #[derive(Deserialize)]
@@ -31,21 +30,34 @@ impl ProxyTcpStream for TlsStream<TcpStream> {}
 
 impl TrojanTlsConnector {
     pub fn new(config: &TrojanTlsConnectorConfig) -> io::Result<Self> {
-        let mut tls_config = ClientConfig::new();
-
-        tls_config.ciphersuites = get_cipher_suite(config.cipher.clone())?;
-
+        let mut  root_certs = RootCertStore::empty();
+        
         if let Some(ref cert_path) = config.cert {
             let cert_path = Path::new(cert_path);
-            tls_config
-                .root_store
-                .add_pem_file(&mut BufReader::new(File::open(cert_path)?))
-                .unwrap();
+            let res = rustls_pemfile::certs(&mut BufReader::new(File::open(cert_path)?))
+                                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid tls cert")).unwrap();
+            //let certs: Vec<Certificate> = res.into_iter().map(& |v| Certificate(v)).collect();
+            root_certs.add_parsable_certificates(res.as_slice());
+  
         } else {
-            tls_config
-                .root_store
-                .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+            let ta: Vec<OwnedTrustAnchor> = webpki_roots::TLS_SERVER_ROOTS.0.into_iter().map(& |v: &TrustAnchor| {
+               OwnedTrustAnchor::from_subject_spki_name_constraints(v.subject, v.spki, v.name_constraints)
+                
+            }).collect();
+            root_certs.add_server_trust_anchors(ta.into_iter());
         }
+        
+        let cipher_suites = get_cipher_suite( config.cipher.clone() ).unwrap();
+
+        let tls_config = ClientConfig::builder()
+                                                    .with_cipher_suites(cipher_suites.as_slice())
+                                                    .with_safe_default_kx_groups()
+                                                    .with_safe_default_protocol_versions()
+                                                    .unwrap()
+                                                    .with_root_certificates(root_certs)
+                                                    .with_no_client_auth();
+
+
 
         Ok(Self {
             sni: config.sni.clone(),
@@ -63,9 +75,10 @@ impl ProxyConnector for TrojanTlsConnector {
     async fn connect_tcp(&self, _: &Address) -> io::Result<Self::TS> {
         let stream = TcpStream::connect(&self.server_addr).await?;
         stream.set_nodelay(true)?;
-
-        let dns_name = DNSNameRef::try_from_ascii_str(&self.sni)
+        use std::convert::TryFrom;
+        let dns_name = ServerName::try_from(self.sni.as_str())
             .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
+
         let stream = TlsConnector::from(self.tls_config.clone())
             .connect(dns_name, stream)
             .await?;

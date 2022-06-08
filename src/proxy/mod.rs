@@ -182,7 +182,9 @@ pub async fn launch_from_config_filename(filename: String) -> io::Result<()> {
     let mut file = File::open(filename)?;
     let mut config_string = String::new();
     file.read_to_string(&mut config_string)?;
+    log::debug!("llllllllllllll");
     launch_from_config_string(config_string).await
+
 }
 
 pub async fn launch_from_config_string(config_string: String) -> io::Result<()> {
@@ -204,6 +206,7 @@ pub async fn launch_from_config_string(config_string: String) -> io::Result<()> 
             .filter_level(LevelFilter::Debug)
             .try_init();
     }
+
     match config.mode.as_str() {
         #[cfg(feature = "server")]
         "server" => {
