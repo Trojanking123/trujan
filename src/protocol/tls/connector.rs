@@ -78,7 +78,7 @@ impl ProxyConnector for TrojanTlsConnector {
         use std::convert::TryFrom;
         let dns_name = ServerName::try_from(self.sni.as_str())
             .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
-
+        log::debug!("sni dnsname: {:?}", dns_name);
         let stream = TlsConnector::from(self.tls_config.clone())
             .connect(dns_name, stream)
             .await?;
